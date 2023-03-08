@@ -4,20 +4,20 @@ import socket
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Optional, Union
+from collections import defaultdict
 
 sys.path.append(os.getcwd())
 
 from tha3.mocap.ifacialmocap_pose import create_default_ifacialmocap_pose
-from tha3.mocap.ifacialmocap_v2 import IFACIALMOCAP_PORT, IFACIALMOCAP_START_STRING, parse_ifacialmocap_v2_pose, \
-    parse_ifacialmocap_v1_pose
+from tha3.mocap.ifacialmocap_v2 import IFACIALMOCAP_PORT, IFACIALMOCAP_START_STRING, parse_ifacialmocap_v2_pose
 from tha3.poser.modes.load_poser import load_poser
 
 import torch
 import wx
 
 from tha3.poser.poser import Poser
-from tha3.mocap.ifacialmocap_constants import *
+from tha3.mocap.ifacialmocap_constants import RIGHT_EYE_BONE_ROTATIONS, LEFT_EYE_BONE_ROTATIONS, HEAD_BONE_ROTATIONS, ROTATION_NAMES
 from tha3.mocap.ifacialmocap_pose_converter import IFacialMocapPoseConverter
 from tha3.util import torch_linear_to_srgb, resize_PIL_image, extract_PIL_image_from_filelike, \
     extract_pytorch_image_from_PIL_image
@@ -45,26 +45,29 @@ class FifoArray:
     def pop(self) -> np.ndarray:
         return self.array[self.i]
 
-class FpsStatistics:
+class MyStatistics:
     def __init__(self):
         self.count = 100
-        self.fps = []
+        self.defaultdict = defaultdict(list)
 
-    def add_fps(self, fps):
-        self.fps.append(fps)
-        while len(self.fps) > self.count:
-            del self.fps[0]
+    def add(self, key: str, value: Union[float, int]) -> None:
+        self.defaultdict[key].append(value)
+        while len(self.defaultdict[key]) > self.count:
+            del self.defaultdict[key][0]
 
-    def get_average_fps(self):
-        if len(self.fps) == 0:
+    def get(self, key: str) -> Union[float, int]:
+        if len(self.defaultdict[key]) == 0:
             return 0.0
         else:
-            return sum(self.fps) / len(self.fps)
+            return sum(self.defaultdict[key])/len(self.defaultdict[key])
+    def txt(self, key: str, value: Union[float, int]) -> str:
+        self.add(key, value)
+        return f"{key}={self.get(key)/10**6:.2f} "
 
 
 class MainFrame(wx.Frame):
     def __init__(self, poser: Poser, pose_converter: IFacialMocapPoseConverter, device: torch.device):
-        super().__init__(None, wx.ID_ANY, "iFacialMocap Puppeteer (Marigold)")
+        super().__init__(None, wx.ID_ANY, "CuTalk")
         self.pose_converter = pose_converter
         self.poser = poser
         self.device = device
@@ -75,8 +78,8 @@ class MainFrame(wx.Frame):
         self.result_image_bitmap = wx.Bitmap(self.poser.get_image_size(), self.poser.get_image_size())
         self.wx_source_image = None
         self.torch_source_image = None
-        self.last_pose = None
-        self.fps_statistics = FpsStatistics()
+        self.last_pose: Optional[list[float]] = None
+        self.statistics = MyStatistics()
         self.last_update_time = None
 
         self.create_receiving_socket()
@@ -87,6 +90,7 @@ class MainFrame(wx.Frame):
         self.update_source_image_bitmap()
         self.update_result_image_bitmap()
         self.fifo_array = FifoArray(fps=28, target_ms=1015)
+        self.load_image_direct(r"C:\Users\qzrp0\talking-head-anime-3-demo\data\images\yukarin.png")
 
     def create_receiving_socket(self):
         self.receiving_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -243,6 +247,7 @@ class MainFrame(wx.Frame):
         self.connection_panel_sizer.Add(capture_device_ip_text, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
 
         self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.10.113")
+#        self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.11.7")
         self.connection_panel_sizer.Add(self.capture_device_ip_text_ctrl, wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
 
         self.start_capture_button = wx.Button(self.connection_panel, label="START CAPTURE!")
@@ -326,6 +331,10 @@ class MainFrame(wx.Frame):
         wx.BufferedPaintDC(self.result_image_panel, self.result_image_bitmap)
 
     def update_result_image_bitmap(self, event: Optional[wx.Event] = None):
+        """
+        XXX: ここがメインロジック
+        """
+        start_time = time.time_ns()
         ifacialmocap_pose = self.read_ifacialmocap_pose()
         current_pose = self.pose_converter.convert(ifacialmocap_pose)
         if self.last_pose is not None and self.last_pose == current_pose:
@@ -340,7 +349,7 @@ class MainFrame(wx.Frame):
             return
 
         pose = torch.tensor(current_pose, device=self.device, dtype=self.poser.get_dtype())
-
+        pose_time = time.time_ns()
         with torch.no_grad():
             output_image = self.poser.pose(self.torch_source_image, pose)[0].float()
             output_image = convert_linear_to_srgb((output_image + 1.0) / 2.0)
@@ -367,10 +376,13 @@ class MainFrame(wx.Frame):
             output_image = 255.0 * torch.transpose(output_image.reshape(c, h * w), 0, 1).reshape(h, w, c)
             output_image = output_image.byte()
 
-        # XXX
+        torch_time = time.time_ns()
+        # XXX fifoを使ってRVCに合わせた遅延をいれる
         numpy_image_ = output_image.detach().cpu().numpy()
         self.fifo_array.push(numpy_image_)
         numpy_image = self.fifo_array.pop()
+
+#        numpy_image = numpy_image_ # XXX 実験のため一時的に遅延なし
 
         wx_image = wx.ImageFromBuffer(numpy_image.shape[0],
                                       numpy_image.shape[1],
@@ -386,14 +398,21 @@ class MainFrame(wx.Frame):
                       (self.poser.get_image_size() - numpy_image.shape[1]) // 2, True)
         del dc
 
-        time_now = time.time_ns()
+        end_time = time.time_ns()
         if self.last_update_time is not None:
-            elapsed_time = time_now - self.last_update_time
-            fps = 1.0 / (elapsed_time / 10**9)
+            call_interval_time = end_time - self.last_update_time
+            fps = 1.0 / (call_interval_time / 10**9)
             if self.torch_source_image is not None:
-                self.fps_statistics.add_fps(fps)
-            self.fps_text.SetLabelText("FPS = %0.2f" % self.fps_statistics.get_average_fps())
-        self.last_update_time = time_now
+                self.statistics.add("fps", fps)
+            FPS = self.statistics.get("fps")
+            txt = f"FPS={FPS:.2f} "
+            txt += self.statistics.txt("interval", call_interval_time)
+            txt += self.statistics.txt("all", end_time - start_time)
+            txt += self.statistics.txt("pose", pose_time - start_time)
+            txt += self.statistics.txt("img", torch_time - pose_time)
+            txt += self.statistics.txt("bitmap", end_time - torch_time)
+            self.fps_text.SetLabelText(txt)
+        self.last_update_time = end_time
 
         self.Refresh()
 
@@ -402,6 +421,26 @@ class MainFrame(wx.Frame):
         color = numpy_image[0:3, :, :]
         new_color = color * alpha + (1.0 - alpha) * background[0:3, :, :]
         return torch.cat([new_color, background[3:4, :, :]], dim=0)
+
+    def load_image_direct(self, image_file_name: str) -> None:
+        try:
+            pil_image = resize_PIL_image(
+                extract_PIL_image_from_filelike(image_file_name),
+                (self.poser.get_image_size(), self.poser.get_image_size()))
+            w, h = pil_image.size
+            if pil_image.mode != 'RGBA':
+                self.source_image_string = "Image must have alpha channel!"
+                self.wx_source_image = None
+                self.torch_source_image = None
+            else:
+                self.wx_source_image = wx.Bitmap.FromBufferRGBA(w, h, pil_image.convert("RGBA").tobytes())
+                self.torch_source_image = extract_pytorch_image_from_PIL_image(pil_image) \
+                    .to(self.device).to(self.poser.get_dtype())
+            self.update_source_image_bitmap()
+        except:
+            message_dialog = wx.MessageDialog(self, "Could not load image " + image_file_name, "Poser", wx.OK)
+            message_dialog.ShowModal()
+            message_dialog.Destroy()
 
     def load_image(self, event: wx.Event):
         dir_name = "data/images"
@@ -432,7 +471,7 @@ class MainFrame(wx.Frame):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Control characters with movement captured by iFacialMocap.')
+    parser = argparse.ArgumentParser(description='Control characters with movement captured by CuTalk.')
     parser.add_argument(
         '--model',
         type=str,
