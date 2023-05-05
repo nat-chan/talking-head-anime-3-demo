@@ -27,6 +27,23 @@ def convert_linear_to_srgb(image: torch.Tensor) -> torch.Tensor:
     rgb_image = torch_linear_to_srgb(image[0:3, :, :])
     return torch.cat([rgb_image, image[3:4, :, :]], dim=0)
 
+import numpy as np
+class FifoArray:
+    def __init__(
+        self,
+        fps: int = 28,
+        target_ms: int = 1015,
+    ) -> None:
+        self.fifo_length = int(fps*target_ms/1000)
+        self.array = np.zeros((self.fifo_length, 512, 512, 4), dtype=np.uint8)
+        self.i = 0
+
+    def push(self, frame: np.ndarray) -> None:
+        self.array[self.i] = frame
+        self.i = (self.i + 1) % self.fifo_length
+
+    def pop(self) -> np.ndarray:
+        return self.array[self.i]
 
 class FpsStatistics:
     def __init__(self):
@@ -69,6 +86,7 @@ class MainFrame(wx.Frame):
 
         self.update_source_image_bitmap()
         self.update_result_image_bitmap()
+        self.fifo_array = FifoArray(fps=28, target_ms=1015)
 
     def create_receiving_socket(self):
         self.receiving_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -224,7 +242,7 @@ class MainFrame(wx.Frame):
         capture_device_ip_text = wx.StaticText(self.connection_panel, label="Capture Device IP:", style=wx.ALIGN_RIGHT)
         self.connection_panel_sizer.Add(capture_device_ip_text, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
 
-        self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.0.1")
+        self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.10.113")
         self.connection_panel_sizer.Add(self.capture_device_ip_text_ctrl, wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
 
         self.start_capture_button = wx.Button(self.connection_panel, label="START CAPTURE!")
@@ -349,7 +367,11 @@ class MainFrame(wx.Frame):
             output_image = 255.0 * torch.transpose(output_image.reshape(c, h * w), 0, 1).reshape(h, w, c)
             output_image = output_image.byte()
 
-        numpy_image = output_image.detach().cpu().numpy()
+        # XXX
+        numpy_image_ = output_image.detach().cpu().numpy()
+        self.fifo_array.push(numpy_image_)
+        numpy_image = self.fifo_array.pop()
+
         wx_image = wx.ImageFromBuffer(numpy_image.shape[0],
                                       numpy_image.shape[1],
                                       numpy_image[:, :, 0:3].tobytes(),
@@ -434,6 +456,6 @@ if __name__ == "__main__":
     app = wx.App()
     main_frame = MainFrame(poser, pose_converter, device)
     main_frame.Show(True)
-    main_frame.capture_timer.Start(10)
+    main_frame.capture_timer.Start(10) #ms
     main_frame.animation_timer.Start(10)
     app.MainLoop()
