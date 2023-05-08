@@ -98,15 +98,15 @@ class MainFrame(wx.Frame):
         self.receiving_socket.setblocking(False)
 
     def create_timers(self):
-        self.capture_timer = wx.Timer(self, wx.ID_ANY)
-        self.Bind(wx.EVT_TIMER, self.update_capture_panel, id=self.capture_timer.GetId())
+#        self.capture_timer = wx.Timer(self, wx.ID_ANY)
+#        self.Bind(wx.EVT_TIMER, self.update_capture_panel, id=self.capture_timer.GetId())
         self.animation_timer = wx.Timer(self, wx.ID_ANY)
         self.Bind(wx.EVT_TIMER, self.update_result_image_bitmap, id=self.animation_timer.GetId())
 
     def on_close(self, event: wx.Event):
         # Stop the timers
         self.animation_timer.Stop()
-        self.capture_timer.Stop()
+        # self.capture_timer.Stop()
 
         # Close receiving socket
         self.receiving_socket.close()
@@ -213,11 +213,21 @@ class MainFrame(wx.Frame):
             self.animation_left_panel_sizer.Add(separator, 0, wx.EXPAND)
 
             self.fps_text = wx.StaticText(self.animation_left_panel, label="")
+            self.fps_text.Bind(wx.EVT_RIGHT_DOWN, self.clipboard_copy)
             self.animation_left_panel_sizer.Add(self.fps_text, wx.SizerFlags().Border())
 
             self.animation_left_panel_sizer.Fit(self.animation_left_panel)
 
         self.animation_panel_sizer.Fit(self.animation_panel)
+
+    def clipboard_copy(self, event: wx.Event) -> None:
+        clipdata = wx.TextDataObject()
+        text = self.fps_text.GetLabelText()
+        clipdata.SetText(text)
+        wx.TheClipboard.Open()
+        wx.TheClipboard.SetData(clipdata)
+        wx.TheClipboard.Close()
+        print(text)
 
     def create_ui(self):
         self.main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -232,8 +242,8 @@ class MainFrame(wx.Frame):
         self.create_animation_panel(self)
         self.main_sizer.Add(self.animation_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
 
-        self.create_capture_panel(self)
-        self.main_sizer.Add(self.capture_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
+        #self.create_capture_panel(self)
+        #self.main_sizer.Add(self.capture_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
 
         self.main_sizer.Fit(self)
 
@@ -293,9 +303,6 @@ class MainFrame(wx.Frame):
 
         column_panel.GetSizer().Fit(column_panel)
         return column_panel
-
-    def paint_capture_panel(self, event: wx.Event):
-        self.update_capture_panel(event)
 
     def update_capture_panel(self, event: wx.Event):
         data = self.ifacialmocap_pose
@@ -495,6 +502,6 @@ if __name__ == "__main__":
     app = wx.App()
     main_frame = MainFrame(poser, pose_converter, device)
     main_frame.Show(True)
-    main_frame.capture_timer.Start(10) #ms
+    # main_frame.capture_timer.Start(10) #ms
     main_frame.animation_timer.Start(10)
     app.MainLoop()
