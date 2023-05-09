@@ -21,9 +21,6 @@ from tha3.util import torch_linear_to_srgb, resize_PIL_image, extract_PIL_image_
     extract_pytorch_image_from_PIL_image
 from tha3.mocap.ifacialmocap_poser_converter_25 import IFacialMocapPoseConverter25
 
-class MyPoseConverter(IFacialMocapPoseConverter25):
-    pass
-
 
 def convert_linear_to_srgb(image: torch.Tensor) -> torch.Tensor:
     rgb_image = torch_linear_to_srgb(image[0:3, :, :])
@@ -70,7 +67,7 @@ class MyStatistics:
 class MainFrame(wx.Frame):
     def __init__(self, poser: Poser, device: torch.device):
         super().__init__(None, wx.ID_ANY, "CuTalk")
-        self.pose_converter = MyPoseConverter()
+        self.pose_converter = IFacialMocapPoseConverter25()
         self.poser = poser
         self.device = device
 
@@ -92,6 +89,7 @@ class MainFrame(wx.Frame):
         self.update_result_image_bitmap()
         self.fifo_array = FifoArray(fps=28, target_ms=1015)
         self.load_image_direct(r"C:\Users\qzrp0\talking-head-anime-3-demo\data\images\yukarin.png")
+        self.SetSize(wx.Size(1024, 512+60))
 
     def create_receiving_socket(self):
         self.receiving_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -153,7 +151,7 @@ class MainFrame(wx.Frame):
 
         image_size = self.poser.get_image_size()
 
-        if True:
+        if False:
             self.input_panel = wx.Panel(self.animation_panel, size=(image_size, image_size + 128),
                                         style=wx.SIMPLE_BORDER)
             self.input_panel_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -173,9 +171,7 @@ class MainFrame(wx.Frame):
             self.input_panel_sizer.Fit(self.input_panel)
 
         if True:
-            self.pose_converter.init_pose_converter_panel(self.animation_panel)
-
-        if True:
+            # アニメーションパネル
             self.animation_left_panel = wx.Panel(self.animation_panel, style=wx.SIMPLE_BORDER)
             self.animation_left_panel_sizer = wx.BoxSizer(wx.VERTICAL)
             self.animation_left_panel.SetSizer(self.animation_left_panel_sizer)
@@ -187,34 +183,32 @@ class MainFrame(wx.Frame):
             self.result_image_panel.Bind(wx.EVT_PAINT, self.paint_result_image_panel)
             self.result_image_panel.Bind(wx.EVT_ERASE_BACKGROUND, self.on_erase_background)
             self.animation_left_panel_sizer.Add(self.result_image_panel, 0, wx.FIXED_MINSIZE)
-
-            separator = wx.StaticLine(self.animation_left_panel, -1, size=(256, 5))
-            self.animation_left_panel_sizer.Add(separator, 0, wx.EXPAND)
-
-            background_text = wx.StaticText(self.animation_left_panel, label="--- Background ---",
-                                            style=wx.ALIGN_CENTER)
-            self.animation_left_panel_sizer.Add(background_text, 0, wx.EXPAND)
-
-            self.output_background_choice = wx.Choice(
-                self.animation_left_panel,
-                choices=[
-                    "TRANSPARENT",
-                    "GREEN",
-                    "BLUE",
-                    "BLACK",
-                    "WHITE"
-                ])
-            self.output_background_choice.SetSelection(0)
-            self.animation_left_panel_sizer.Add(self.output_background_choice, 0, wx.EXPAND)
-
-            separator = wx.StaticLine(self.animation_left_panel, -1, size=(256, 5))
-            self.animation_left_panel_sizer.Add(separator, 0, wx.EXPAND)
-
-            self.fps_text = wx.StaticText(self.animation_left_panel, label="")
-            self.fps_text.Bind(wx.EVT_RIGHT_DOWN, self.clipboard_copy)
-            self.animation_left_panel_sizer.Add(self.fps_text, wx.SizerFlags().Border())
-
+            # アニメーションパネル登録DONE
             self.animation_left_panel_sizer.Fit(self.animation_left_panel)
+
+        if True:
+            self.pose_converter.init_pose_converter_panel(self.animation_panel)
+            # モンキーパッチング
+            self.load_image_button = wx.Button(self.pose_converter.panel, label="Load Image")
+            self.pose_converter.panel_sizer.Add(self.load_image_button, 1, wx.EXPAND)
+            self.load_image_button.Bind(wx.EVT_BUTTON, self.load_image)
+            self.output_background_choice = wx.Choice( self.pose_converter.panel, choices=[ "TRANSPARENT", "GREEN", "BLUE", "BLACK", "WHITE" ])
+            self.output_background_choice.SetSelection(0)
+            self.pose_converter.panel_sizer.Add(self.output_background_choice, 0, wx.EXPAND)
+
+            self.fps_text = wx.StaticText(self.pose_converter.panel, label="")
+            self.fps_text.Bind(wx.EVT_RIGHT_DOWN, self.clipboard_copy)
+            self.pose_converter.panel_sizer.Add(self.fps_text, wx.SizerFlags().Border())
+
+            # キャプチャー
+            self.capture_device_ip_text_ctrl = wx.TextCtrl(self.pose_converter.panel, value="192.168.10.113")
+            self.pose_converter.panel_sizer.Add(self.capture_device_ip_text_ctrl, wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
+            self.start_capture_button = wx.Button(self.pose_converter.panel, label="START CAPTURE!")
+            self.pose_converter.panel_sizer.Add(self.start_capture_button, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
+            self.start_capture_button.Bind(wx.EVT_BUTTON, self.on_start_capture)
+
+            self.pose_converter.panel_sizer.Fit(self.pose_converter.panel)
+
 
         self.animation_panel_sizer.Fit(self.animation_panel)
 
@@ -237,26 +231,7 @@ class MainFrame(wx.Frame):
         self.create_animation_panel(self)
         self.main_sizer.Add(self.animation_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
 
-        self.create_connection_panel(self)
-        self.main_sizer.Add(self.connection_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
-
         self.main_sizer.Fit(self)
-
-    def create_connection_panel(self, parent):
-        self.connection_panel = wx.Panel(parent, style=wx.RAISED_BORDER)
-        self.connection_panel_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.connection_panel.SetSizer(self.connection_panel_sizer)
-        self.connection_panel.SetAutoLayout(1)
-
-        capture_device_ip_text = wx.StaticText(self.connection_panel, label="Capture Device IP:", style=wx.ALIGN_RIGHT)
-        self.connection_panel_sizer.Add(capture_device_ip_text, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
-
-        self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.10.113")
-        self.connection_panel_sizer.Add(self.capture_device_ip_text_ctrl, wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
-
-        self.start_capture_button = wx.Button(self.connection_panel, label="START CAPTURE!")
-        self.connection_panel_sizer.Add(self.start_capture_button, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
-        self.start_capture_button.Bind(wx.EVT_BUTTON, self.on_start_capture)
 
     @staticmethod
     def convert_to_100(x):
