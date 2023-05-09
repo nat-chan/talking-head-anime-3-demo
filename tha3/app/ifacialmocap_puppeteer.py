@@ -17,10 +17,12 @@ import torch
 import wx
 
 from tha3.poser.poser import Poser
-from tha3.mocap.ifacialmocap_constants import RIGHT_EYE_BONE_ROTATIONS, LEFT_EYE_BONE_ROTATIONS, HEAD_BONE_ROTATIONS, ROTATION_NAMES
-from tha3.mocap.ifacialmocap_pose_converter import IFacialMocapPoseConverter
 from tha3.util import torch_linear_to_srgb, resize_PIL_image, extract_PIL_image_from_filelike, \
     extract_pytorch_image_from_PIL_image
+from tha3.mocap.ifacialmocap_poser_converter_25 import IFacialMocapPoseConverter25
+
+class MyPoseConverter(IFacialMocapPoseConverter25):
+    pass
 
 
 def convert_linear_to_srgb(image: torch.Tensor) -> torch.Tensor:
@@ -66,12 +68,11 @@ class MyStatistics:
 
 
 class MainFrame(wx.Frame):
-    def __init__(self, poser: Poser, pose_converter: IFacialMocapPoseConverter, device: torch.device):
+    def __init__(self, poser: Poser, device: torch.device):
         super().__init__(None, wx.ID_ANY, "CuTalk")
-        self.pose_converter = pose_converter
+        self.pose_converter = MyPoseConverter()
         self.poser = poser
         self.device = device
-
 
         self.ifacialmocap_pose = create_default_ifacialmocap_pose()
         self.source_image_bitmap = wx.Bitmap(self.poser.get_image_size(), self.poser.get_image_size())
@@ -98,15 +99,12 @@ class MainFrame(wx.Frame):
         self.receiving_socket.setblocking(False)
 
     def create_timers(self):
-#        self.capture_timer = wx.Timer(self, wx.ID_ANY)
-#        self.Bind(wx.EVT_TIMER, self.update_capture_panel, id=self.capture_timer.GetId())
         self.animation_timer = wx.Timer(self, wx.ID_ANY)
         self.Bind(wx.EVT_TIMER, self.update_result_image_bitmap, id=self.animation_timer.GetId())
 
     def on_close(self, event: wx.Event):
         # Stop the timers
         self.animation_timer.Stop()
-        # self.capture_timer.Stop()
 
         # Close receiving socket
         self.receiving_socket.close()
@@ -236,14 +234,11 @@ class MainFrame(wx.Frame):
 
         self.capture_pose_lock = threading.Lock()
 
-        self.create_connection_panel(self)
-        self.main_sizer.Add(self.connection_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
-
         self.create_animation_panel(self)
         self.main_sizer.Add(self.animation_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
 
-        #self.create_capture_panel(self)
-        #self.main_sizer.Add(self.capture_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
+        self.create_connection_panel(self)
+        self.main_sizer.Add(self.connection_panel, wx.SizerFlags(0).Expand().Border(wx.ALL, 5))
 
         self.main_sizer.Fit(self)
 
@@ -257,58 +252,11 @@ class MainFrame(wx.Frame):
         self.connection_panel_sizer.Add(capture_device_ip_text, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
 
         self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.10.113")
-#        self.capture_device_ip_text_ctrl = wx.TextCtrl(self.connection_panel, value="192.168.11.7")
         self.connection_panel_sizer.Add(self.capture_device_ip_text_ctrl, wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
 
         self.start_capture_button = wx.Button(self.connection_panel, label="START CAPTURE!")
         self.connection_panel_sizer.Add(self.start_capture_button, wx.SizerFlags(0).FixedMinSize().Border(wx.ALL, 3))
         self.start_capture_button.Bind(wx.EVT_BUTTON, self.on_start_capture)
-
-    def create_capture_panel(self, parent):
-        self.capture_panel = wx.Panel(parent, style=wx.RAISED_BORDER)
-        self.capture_panel_sizer = wx.FlexGridSizer(cols=5)
-        for i in range(5):
-            self.capture_panel_sizer.AddGrowableCol(i)
-        self.capture_panel.SetSizer(self.capture_panel_sizer)
-        self.capture_panel.SetAutoLayout(1)
-
-        self.rotation_labels = {}
-        self.rotation_value_labels = {}
-        rotation_column_0 = self.create_rotation_column(self.capture_panel, RIGHT_EYE_BONE_ROTATIONS)
-        self.capture_panel_sizer.Add(rotation_column_0, wx.SizerFlags(0).Expand().Border(wx.ALL, 3))
-        rotation_column_1 = self.create_rotation_column(self.capture_panel, LEFT_EYE_BONE_ROTATIONS)
-        self.capture_panel_sizer.Add(rotation_column_1, wx.SizerFlags(0).Expand().Border(wx.ALL, 3))
-        rotation_column_2 = self.create_rotation_column(self.capture_panel, HEAD_BONE_ROTATIONS)
-        self.capture_panel_sizer.Add(rotation_column_2, wx.SizerFlags(0).Expand().Border(wx.ALL, 3))
-
-    def create_rotation_column(self, parent, rotation_names):
-        column_panel = wx.Panel(parent, style=wx.SIMPLE_BORDER)
-        column_panel_sizer = wx.FlexGridSizer(cols=2)
-        column_panel_sizer.AddGrowableCol(1)
-        column_panel.SetSizer(column_panel_sizer)
-        column_panel.SetAutoLayout(1)
-
-        for rotation_name in rotation_names:
-            self.rotation_labels[rotation_name] = wx.StaticText(
-                column_panel, label=rotation_name, style=wx.ALIGN_RIGHT)
-            column_panel_sizer.Add(self.rotation_labels[rotation_name],
-                                   wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
-
-            self.rotation_value_labels[rotation_name] = wx.TextCtrl(
-                column_panel, style=wx.TE_RIGHT)
-            self.rotation_value_labels[rotation_name].SetValue("0.00")
-            self.rotation_value_labels[rotation_name].Disable()
-            column_panel_sizer.Add(self.rotation_value_labels[rotation_name],
-                                   wx.SizerFlags(1).Expand().Border(wx.ALL, 3))
-
-        column_panel.GetSizer().Fit(column_panel)
-        return column_panel
-
-    def update_capture_panel(self, event: wx.Event):
-        data = self.ifacialmocap_pose
-        for rotation_name in ROTATION_NAMES:
-            value = data[rotation_name]
-            self.rotation_value_labels[rotation_name].SetValue("%0.2f" % value)
 
     @staticmethod
     def convert_to_100(x):
@@ -389,7 +337,7 @@ class MainFrame(wx.Frame):
         self.fifo_array.push(numpy_image_)
         numpy_image = self.fifo_array.pop()
 
-#        numpy_image = numpy_image_ # XXX 実験のため一時的に遅延なし
+        numpy_image = numpy_image_ # XXX 実験のため一時的に遅延なし
 
         wx_image = wx.ImageFromBuffer(numpy_image.shape[0],
                                       numpy_image.shape[1],
@@ -483,7 +431,7 @@ if __name__ == "__main__":
         '--model',
         type=str,
         required=False,
-        default='standard_float',
+        default='standard_half',
         choices=['standard_float', 'separable_float', 'standard_half', 'separable_half'],
         help='The model to use.')
     args = parser.parse_args()
@@ -495,13 +443,9 @@ if __name__ == "__main__":
         print(e)
         sys.exit()
 
-    from tha3.mocap.ifacialmocap_poser_converter_25 import create_ifacialmocap_pose_converter
-
-    pose_converter = create_ifacialmocap_pose_converter()
 
     app = wx.App()
-    main_frame = MainFrame(poser, pose_converter, device)
+    main_frame = MainFrame(poser, device)
     main_frame.Show(True)
-    # main_frame.capture_timer.Start(10) #ms
     main_frame.animation_timer.Start(10)
     app.MainLoop()
